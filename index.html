@@ -1,41 +1,201 @@
 <!doctype html>
-<html>
+<html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>Binance Market Share</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Binance Market Share of Total Crypto Market Cap</title>
+
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Arial, sans-serif; margin: 40px; }
+    h1 { margin-bottom: 8px; }
+    .meta { margin: 12px 0 18px; padding: 12px 14px; border: 1px solid #ddd; border-radius: 10px; display: inline-block; }
+    .meta strong { font-size: 18px; }
+    .sub { color: #555; margin-top: 4px; }
+    .links { margin: 12px 0 18px; }
+    .links a { margin-right: 14px; }
+    .chart-wrap { max-width: 1100px; }
+    canvas { background: #fff; border: 1px solid #eee; border-radius: 10px; }
+    .footer { margin-top: 18px; color: #666; }
+    .img-fallback { margin-top: 14px; }
+  </style>
+
+  <!-- Chart.js + zoom plugin + CSV parser -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
 </head>
 
-  <div id="stats" style="font-size:18px; margin: 12px 0;">
-  Loading today’s stats…
-</div>
-
-<script>
-fetch("latest.json?cache=" + Date.now())
-  .then(r => r.json())
-  .then(d => {
-    const sign = d.pp_vs_avg >= 0 ? "+" : "";
-    document.getElementById("stats").innerHTML =
-      `<b>Today:</b> ${d.today_pct}% &nbsp; | &nbsp; 
-       <b>Avg:</b> ${d.avg_pct}% &nbsp; | &nbsp;
-       <b>Vs Avg:</b> ${sign}${d.pp_vs_avg}pp (${sign}${d.pct_vs_avg}%)<br>
-       <span style="color:#666; font-size:14px;">Updated: ${d.updated_utc}</span>`;
-  })
-  .catch(() => {
-    document.getElementById("stats").innerText = "Could not load latest stats.";
-  });
-</script>
-  
-<body style="font-family: Arial; max-width: 1000px; margin: 40px auto;">
+<body>
   <h1>Binance Market Share of Total Crypto Market Cap</h1>
 
-  <p>
-    <a href="binance_market_share_history.csv">Download CSV</a>
-  </p>
+  <div class="links">
+    <a href="./binance_market_share_history_raw.csv" download>Download CSV (raw)</a>
+    <a href="./binance_market_share_history_pretty.csv" download>Download CSV (pretty)</a>
+  </div>
 
-  <iframe src="plot.html" style="width:100%; height:650px; border:none;"></iframe>
+  <div id="meta" class="meta">
+    Loading latest values…
+  </div>
 
-  <p style="color:#666;">
+  <div class="chart-wrap">
+    <canvas id="chart" height="110"></canvas>
+  </div>
+
+  <div class="img-fallback">
+    <p class="sub">Static fallback image (generated daily):</p>
+    <img src="./chart.png" alt="chart" style="max-width:1100px;width:100%;border:1px solid #eee;border-radius:10px;" />
+  </div>
+
+  <div class="footer">
     Auto-updated daily via GitHub Actions.
-  </p>
+    <br/>
+    Tip: drag to pan, scroll/pinch to zoom. Double-click to reset.
+  </div>
+
+<script>
+  async function loadSummary() {
+    const res = await fetch('./summary.json', { cache: 'no-store' });
+    if (!res.ok) throw new Error('summary.json not found (did the Action run & commit?)');
+    return await res.json();
+  }
+
+  async function loadCSV() {
+    const res = await fetch('./binance_market_share_history_raw.csv', { cache: 'no-store' });
+    if (!res.ok) throw new Error('CSV not found');
+    const text = await res.text();
+    const parsed = Papa.parse(text, { header: true, dynamicTyping: true, skipEmptyLines: true });
+    return parsed.data;
+  }
+
+  function fmtPct(x, d=2) {
+    if (x === null || x === undefined || Number.isNaN(x)) return '—';
+    return `${Number(x).toFixed(d)}%`;
+  }
+
+  function fmtSigned(x, d=2, suffix='') {
+    if (x === null || x === undefined || Number.isNaN(x)) return '—';
+    const s = Number(x);
+    const sign = s >= 0 ? '+' : '';
+    return `${sign}${s.toFixed(d)}${suffix}`;
+  }
+
+  function renderMeta(summary) {
+    const today = summary.today_share_pct;
+    const avg = summary.average_share_pct;
+    const diffPP = summary.diff_pp;
+    const diffPct = summary.diff_pct_vs_avg;
+
+    const el = document.getElementById('meta');
+    el.innerHTML = `
+      <div><strong>Today:</strong> ${fmtPct(today, 3)} <span class="sub">(as of ${summary.as_of_date})</span></div>
+      <div class="sub">
+        Average (window): ${fmtPct(avg, 2)} ·
+        Today vs Avg: ${fmtSigned(diffPP, 2, 'pp')} (${fmtSigned(diffPct, 1, '%')})
+      </div>
+    `;
+  }
+
+  function buildChart(rows, summary) {
+    // rows must have date + binance_market_share_pct
+    const points = rows
+      .filter(r => r.date && r.binance_market_share_pct !== null && r.binance_market_share_pct !== undefined && !Number.isNaN(r.binance_market_share_pct))
+      .map(r => ({ x: r.date, y: Number(r.binance_market_share_pct) }));
+
+    const avg = summary.average_share_pct;
+
+    const ctx = document.getElementById('chart');
+
+    const chart = new Chart(ctx, {
+      type: 'line',
+      data: {
+        datasets: [
+          {
+            label: 'Daily %',
+            data: points,
+            borderWidth: 2,
+            pointRadius: 0,
+            tension: 0.15,
+          },
+          {
+            label: `Average (${avg.toFixed(2)}%)`,
+            data: points.map(p => ({ x: p.x, y: avg })),
+            borderWidth: 2,
+            borderDash: [8, 6],
+            borderColor: 'red',   // average line red
+            pointRadius: 0,
+          }
+        ]
+      },
+      options: {
+        responsive: true,
+        interaction: { mode: 'index', intersect: false },
+        parsing: false,
+        scales: {
+          x: {
+            type: 'time',
+            time: { unit: 'month' }
+          },
+          y: {
+            title: { display: true, text: '% Share' }
+          }
+        },
+        plugins: {
+          legend: { position: 'top', align: 'start' },
+          tooltip: {
+            callbacks: {
+              label: (ctx) => `${ctx.dataset.label}: ${ctx.parsed.y.toFixed(3)}%`
+            }
+          },
+          zoom: {
+            pan: { enabled: true, mode: 'x' },
+            zoom: {
+              wheel: { enabled: true },
+              pinch: { enabled: true },
+              mode: 'x'
+            },
+            limits: { x: { min: 'original', max: 'original' } }
+          }
+        },
+        onClick: (e, els, chart) => {
+          // double click reset is easier via built-in Chart.js? We'll do manual:
+        }
+      },
+      plugins: [{
+        id: 'dblclickReset',
+        afterEvent(chart, args) {
+          const e = args.event;
+          if (e.type === 'dblclick') chart.resetZoom();
+        }
+      }]
+    });
+
+    return chart;
+  }
+
+  (async () => {
+    try {
+      const summary = await loadSummary();
+      renderMeta(summary);
+
+      const rows = await loadCSV();
+      // IMPORTANT: include time adapter for Chart.js time scale via built-in Intl? We’ll use date strings; if time scale errors, switch x scale to 'category'
+      // If you see an error about adapters, change x axis type to 'category' and it will still work.
+
+      // If your GitHub pages environment lacks time adapter, you can quickly switch:
+      // scales.x.type = 'category'
+
+      // Try time scale first:
+      buildChart(rows, summary);
+
+    } catch (err) {
+      document.getElementById('meta').textContent =
+        `Could not load live values. Make sure your GitHub Action ran and committed files. Error: ${err.message}`;
+      console.error(err);
+    }
+  })();
+</script>
+
+<!-- If time scale complains about date adapters, easiest fix:
+     change x scale to 'category' and keep x = r.date -->
 </body>
 </html>

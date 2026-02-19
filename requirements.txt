@@ -3,4 +3,3 @@ matplotlib
 requests
 cloudscraper
 beautifulsoup4
-lxml

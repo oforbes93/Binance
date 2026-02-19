@@ -1,126 +1,69 @@
-<!doctype html>
-<html lang="en">
+<!DOCTYPE html>
+<html>
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Binance Market Share</title>
-
   <style>
-    html, body {
-      margin: 0;
-      padding: 0;
+    body {
+      font-family: Arial, sans-serif;
+      margin: 40px;
       background: #ffffff;
-      font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
-      color: #222;
+      color: #111;
     }
 
-    .wrap {
-      max-width: 1400px;
-      margin: 0 auto;
-      padding: 24px;
-    }
-
-    /* ===== 2 COLUMN LAYOUT ===== */
-    .grid {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 28px;
-      align-items: start;
-    }
-
-    @media (max-width: 900px) {
-      .grid {
-        grid-template-columns: 1fr;
-      }
-    }
-
-    .card {
-      border: 1px solid #e6e6e6;
-      border-radius: 10px;
-      padding: 18px;
-    }
-
-    .title {
-      font-size: 20px;
-      font-weight: 650;
-      margin: 0 0 14px;
+    h1 {
+      margin-bottom: 10px;
     }
 
     .chart {
+      margin-top: 20px;
+      max-width: 900px;
+    }
+
+    .chart img {
       width: 100%;
       height: auto;
-      display: block;
+      border: 1px solid #ddd;
+      border-radius: 6px;
     }
 
-    /* ===== DESCRIPTION BOX ===== */
-    .methodology {
-      margin-top: 18px;
-      padding-top: 14px;
-      border-top: 1px solid #eee;
-      font-size: 13px;
+    .description {
+      max-width: 900px;
+      margin-top: 25px;
       line-height: 1.6;
-      color: #555;
-    }
-
-    .methodology strong {
-      color: #222;
-    }
-
-    .placeholder {
-      min-height: 520px;
-      display: grid;
-      place-items: center;
-      color: #888;
-      background: #fbfbfb;
-      border: 1px dashed #d9d9d9;
-      border-radius: 10px;
-      text-align: center;
-      padding: 16px;
+      color: #444;
       font-size: 14px;
     }
   </style>
 </head>
 
 <body>
-  <div class="wrap">
-    <div class="grid">
 
-      <!-- ===== LEFT: MAIN CHART ===== -->
-      <section class="card">
-        <h2 class="title">Binance Market Share of Total Crypto Market Cap</h2>
+  <h1>Binance Market Share of Total Crypto Market Cap</h1>
 
-        <img class="chart" src="chart.png" alt="Binance Market Share chart" />
-
-        <!-- ===== DESCRIPTION ===== -->
-        <div class="methodology">
-          <strong>Overview:</strong> This chart tracks Binance’s share of total
-          cryptocurrency market capitalisation over time.<br><br>
-
-          <strong>Data sources:</strong><br>
-          • Binance asset balances: DefiLlama (CEX transparency data)<br>
-          • Total crypto market cap: TradingView (CRYPTOCAP:TOTAL)<br><br>
-
-          <strong>Methodology:</strong><br>
-          Market share is calculated daily as:<br>
-          <em>Binance total assets ÷ total crypto market capitalisation</em><br><br>
-
-          The dataset and chart are automatically refreshed each day via
-          GitHub Actions.
-        </div>
-      </section>
-
-      <!-- ===== RIGHT: FUTURE CHART SPACE ===== -->
-      <section class="card">
-        <h2 class="title">Additional analytics (coming soon)</h2>
-
-        <div class="placeholder">
-          Future chart placeholder.<br><br>
-          You can drop another PNG or interactive chart here later.
-        </div>
-      </section>
-
-    </div>
+  <div class="chart">
+    <img src="chart.png" alt="Binance Market Share Chart">
   </div>
+
+  <div class="description">
+    <p>
+      This chart shows Binance’s share of the total cryptocurrency market
+      capitalisation over time.
+    </p>
+
+    <p>
+      Binance asset data is sourced from DefiLlama’s centralised exchange
+      transparency dashboards, while total crypto market capitalisation is
+      sourced from TradingView’s CRYPTOCAP:TOTAL series. The series is updated
+      daily via GitHub Actions.
+    </p>
+
+    <p>
+      The metric is calculated as Binance total assets divided by total crypto
+      market capitalisation, expressed as a percentage.
+    </p>
+  </div>
+
 </body>
 </html>
 

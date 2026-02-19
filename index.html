@@ -4,6 +4,27 @@
   <meta charset="utf-8" />
   <title>Binance Market Share</title>
 </head>
+
+  <div id="stats" style="font-size:18px; margin: 12px 0;">
+  Loading today’s stats…
+</div>
+
+<script>
+fetch("latest.json?cache=" + Date.now())
+  .then(r => r.json())
+  .then(d => {
+    const sign = d.pp_vs_avg >= 0 ? "+" : "";
+    document.getElementById("stats").innerHTML =
+      `<b>Today:</b> ${d.today_pct}% &nbsp; | &nbsp; 
+       <b>Avg:</b> ${d.avg_pct}% &nbsp; | &nbsp;
+       <b>Vs Avg:</b> ${sign}${d.pp_vs_avg}pp (${sign}${d.pct_vs_avg}%)<br>
+       <span style="color:#666; font-size:14px;">Updated: ${d.updated_utc}</span>`;
+  })
+  .catch(() => {
+    document.getElementById("stats").innerText = "Could not load latest stats.";
+  });
+</script>
+  
 <body style="font-family: Arial; max-width: 1000px; margin: 40px auto;">
   <h1>Binance Market Share of Total Crypto Market Cap</h1>
 
@@ -11,7 +32,7 @@
     <a href="binance_market_share_history.csv">Download CSV</a>
   </p>
 
-  <img src="chart.png" style="max-width:100%;" />
+  <iframe src="plot.html" style="width:100%; height:650px; border:none;"></iframe>
 
   <p style="color:#666;">
     Auto-updated daily via GitHub Actions.

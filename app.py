@@ -1,4 +1,5 @@
-import os
+import json
+import time
 from datetime import datetime, timezone
 
 import pandas as pd
@@ -6,33 +7,96 @@ import matplotlib.pyplot as plt
 import requests
 import cloudscraper
 from bs4 import BeautifulSoup
-import json
 
 # =========================
-# CONFIG
+# CONFIG (edit if needed)
 # =========================
-HISTORICAL_CSV = "binance_market_share_history.csv"
-OUTPUT_CSV = "binance_market_share_history.csv"  # overwrite in-place (simple for Pages)
-OUTPUT_PNG = "chart.png"
+HISTORICAL_CSV = "binance_market_share_history.csv"   # your existing historicals file
+OUTPUT_RAW_CSV = "binance_market_share_history_raw.csv"
+OUTPUT_PRETTY_CSV = "binance_market_share_history_pretty.csv"
+OUTPUT_CHART = "chart.png"
+OUTPUT_SUMMARY = "summary.json"
+
 DAYS_TO_PLOT = 365
+USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36"
 
-# Column names we will enforce in the saved CSV
-COL_DATE = "date"
-COL_TOTAL = "Total MCAP"
-COL_BINANCE = "Binance Assets"
-COL_SHARE = "Binance Market Share"
 
 # =========================
-# Fetchers (TODAY)
+# Helpers
 # =========================
-def get_binance_assets_today_defillama_sum() -> float:
+def _today_utc_date():
+    return datetime.now(timezone.utc).date()
+
+
+def _standardize_columns(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Uses DefiLlama Next.js payload to get 'currentTvlByChain' and sums to total assets.
-    Returns USD float.
+    Accepts either:
+      - raw columns: date,total_mcap_usd,binance_assets_usd,binance_market_share_pct
+      - pretty columns: date,Total MCAP,Binance Assets,Binance Market Share
+    and returns the raw schema.
     """
+    cols = {c.strip(): c for c in df.columns}
+
+    # normalize date column
+    if "date" not in [c.lower() for c in df.columns]:
+        # try common variants
+        for c in df.columns:
+            if "date" in c.lower():
+                df = df.rename(columns={c: "date"})
+                break
+
+    # if already raw schema:
+    raw_needed = {"date", "total_mcap_usd", "binance_assets_usd", "binance_market_share_pct"}
+    if raw_needed.issubset(set(df.columns)):
+        pass
+    else:
+        # try map from pretty schema
+        mapping = {}
+        for c in df.columns:
+            cl = c.lower().strip()
+            if cl in ["total mcap", "total_mcap", "total market cap", "total mcap (bn)", "total mcap bn"]:
+                mapping[c] = "total_mcap_usd"
+            elif cl in ["binance assets", "binance_assets", "binance assets (bn)", "binance assets bn"]:
+                mapping[c] = "binance_assets_usd"
+            elif cl in ["binance market share", "binance_market_share", "binance market share %", "binance market share pct"]:
+                mapping[c] = "binance_market_share_pct"
+        if mapping:
+            df = df.rename(columns=mapping)
+
+    # final check
+    missing = [c for c in ["date", "total_mcap_usd", "binance_assets_usd", "binance_market_share_pct"] if c not in df.columns]
+    if missing:
+        raise ValueError(
+            f"Historical CSV missing required columns: {missing}\n"
+            f"Found columns: {list(df.columns)}\n"
+            f"Expected either raw schema: {list(raw_needed)} or pretty schema: "
+            f"['date','Total MCAP','Binance Assets','Binance Market Share']"
+        )
+
+    df["date"] = pd.to_datetime(df["date"]).dt.date
+    df = df.sort_values("date").reset_index(drop=True)
+    return df
+
+
+# =========================
+# 1) Load historical
+# =========================
+def load_historical(path: str) -> pd.DataFrame:
+    df = pd.read_csv(path)
+    df = _standardize_columns(df)
+    return df
+
+
+# =========================
+# 2) Fetch Binance assets today (DeFiLlama page scrape)
+# =========================
+def get_binance_assets_today_defillama() -> float:
     url = "https://defillama.com/cex/binance-cex"
-    scraper = cloudscraper.create_scraper()
-    r = scraper.get(url, timeout=30)
+
+    scraper = cloudscraper.create_scraper(
+        browser={"browser": "chrome", "platform": "darwin", "mobile": False}
+    )
+    r = scraper.get(url, timeout=30, headers={"User-Agent": USER_AGENT})
     r.raise_for_status()
 
     soup = BeautifulSoup(r.text, "html.parser")
@@ -42,153 +106,135 @@ def get_binance_assets_today_defillama_sum() -> float:
 
     data = json.loads(script_tag.string)
     page_props = data.get("props", {}).get("pageProps", {})
+
     chains = page_props.get("currentTvlByChain")
     if chains is None:
         raise KeyError(f"'currentTvlByChain' not found. Keys: {list(page_props.keys())}")
 
-    # chains is { "BTC": ..., "ETH": ..., ... } values in USD
     total_balance = float(sum(chains.values()))
     return total_balance
 
 
-def get_total_crypto_mcap_today_coingecko() -> float:
-    """
-    CoinGecko global endpoint (no key usually needed) for total market cap USD.
-    """
+# =========================
+# 3) Fetch total crypto mcap today (CoinGecko Global)
+# =========================
+def get_total_crypto_mcap_today() -> float:
     url = "https://api.coingecko.com/api/v3/global"
-    r = requests.get(url, timeout=20)
-    r.raise_for_status()
-    data = r.json()
-    return float(data["data"]["total_market_cap"]["usd"])
+    headers = {"User-Agent": USER_AGENT}
+
+    # light retry
+    last_err = None
+    for _ in range(3):
+        try:
+            r = requests.get(url, headers=headers, timeout=20)
+            r.raise_for_status()
+            data = r.json()
+            return float(data["data"]["total_market_cap"]["usd"])
+        except Exception as e:
+            last_err = e
+            time.sleep(1.2)
+
+    raise RuntimeError(f"CoinGecko /global failed after retries: {last_err}")
 
 
 # =========================
-# Load + normalize historical CSV
-# =========================
-def load_historical(path: str) -> pd.DataFrame:
-    if not os.path.exists(path):
-        raise FileNotFoundError(
-            f"Missing {path}. Put your historical CSV in the repo root named '{HISTORICAL_CSV}'."
-        )
-
-    df = pd.read_csv(path)
-
-    # Accept either your old internal cols or the renamed “pretty” cols
-    # Old: date,total_mcap_usd,binance_assets_usd,binance_market_share_pct
-    # New: date,Total MCAP,Binance Assets,Binance Market Share
-    if "total_mcap_usd" in df.columns:
-        df = df.rename(columns={
-            "total_mcap_usd": COL_TOTAL,
-            "binance_assets_usd": COL_BINANCE,
-            "binance_market_share_pct": COL_SHARE,
-        })
-
-    # Some CSVs may have "Date" instead of "date"
-    if "Date" in df.columns and COL_DATE not in df.columns:
-        df = df.rename(columns={"Date": COL_DATE})
-
-    required = {COL_DATE, COL_TOTAL, COL_BINANCE, COL_SHARE}
-    missing = [c for c in required if c not in df.columns]
-    if missing:
-        raise ValueError(f"Historical CSV is missing columns: {missing}. Columns found: {list(df.columns)}")
-
-    df[COL_DATE] = pd.to_datetime(df[COL_DATE]).dt.date
-
-    # Ensure numeric
-    for c in [COL_TOTAL, COL_BINANCE, COL_SHARE]:
-        df[c] = pd.to_numeric(df[c], errors="coerce")
-
-    df = df.sort_values(COL_DATE).reset_index(drop=True)
-    return df
-
-
-# =========================
-# Upsert today's row
+# 4) Upsert today's row
 # =========================
 def upsert_today(df_hist: pd.DataFrame) -> pd.DataFrame:
-    today = datetime.now(timezone.utc).date()
+    today = _today_utc_date()
 
-    if today in set(df_hist[COL_DATE].values):
+    if today in df_hist["date"].values:
         print("✅ Today already present — no update needed.")
         return df_hist
 
-    print("🚀 Fetching today's data...")
-    binance_assets = get_binance_assets_today_defillama_sum()
-    total_mcap = get_total_crypto_mcap_today_coingecko()
+    print("🚀 Fetching today's Binance assets (DeFiLlama) + total mcap (CoinGecko)...")
+    binance_assets = get_binance_assets_today_defillama()
+    time.sleep(0.5)
+    total_mcap = get_total_crypto_mcap_today()
 
     share_pct = (binance_assets / total_mcap) * 100.0
 
-    new_row = pd.DataFrame({
-        COL_DATE: [today],
-        COL_TOTAL: [total_mcap],
-        COL_BINANCE: [binance_assets],
-        COL_SHARE: [share_pct],
-    })
+    new_row = pd.DataFrame(
+        {
+            "date": [today],
+            "total_mcap_usd": [total_mcap],
+            "binance_assets_usd": [binance_assets],
+            "binance_market_share_pct": [share_pct],
+        }
+    )
 
     df_updated = pd.concat([df_hist, new_row], ignore_index=True)
-    df_updated = df_updated.sort_values(COL_DATE).reset_index(drop=True)
+    df_updated = df_updated.sort_values("date").reset_index(drop=True)
+
     print("✅ Added today's row")
     return df_updated
 
-import json
-from datetime import datetime
 
-def write_latest_json(df_pretty, out_path="latest.json"):
-    # expects columns: date, Binance Market Share (or adjust below)
-    last = df_pretty.dropna().iloc[-1]
-    avg = df_pretty["Binance Market Share"].mean()
+# =========================
+# 5) Pretty output + summary.json
+# =========================
+def make_pretty(df_raw: pd.DataFrame) -> pd.DataFrame:
+    df = df_raw.copy()
+    df = df.rename(
+        columns={
+            "total_mcap_usd": "Total MCAP",
+            "binance_assets_usd": "Binance Assets",
+            "binance_market_share_pct": "Binance Market Share",
+        }
+    )
 
-    today_val = float(last["Binance Market Share"])
-    avg_val = float(avg)
-    pp = today_val - avg_val
-    rel = (pp / avg_val) * 100 if avg_val else None
+    # billions
+    df["Total MCAP"] = (df["Total MCAP"] / 1e9).round(2)
+    df["Binance Assets"] = (df["Binance Assets"] / 1e9).round(2)
+    df["Binance Market Share"] = df["Binance Market Share"].round(3)
+    return df
 
-    payload = {
-        "date": str(last["date"]),
-        "today_pct": round(today_val, 3),
-        "avg_pct": round(avg_val, 3),
-        "pp_vs_avg": round(pp, 3),
-        "pct_vs_avg": round(rel, 2) if rel is not None else None,
-        "updated_utc": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC"),
+
+def write_summary(df_plot: pd.DataFrame) -> dict:
+    # df_plot must have date + binance_market_share_pct
+    df_plot = df_plot.dropna(subset=["binance_market_share_pct"]).copy()
+
+    today_row = df_plot.iloc[-1]
+    avg = float(df_plot["binance_market_share_pct"].mean())
+    today_val = float(today_row["binance_market_share_pct"])
+    diff_pp = today_val - avg
+    diff_pct = (diff_pp / avg) * 100.0 if avg != 0 else 0.0
+
+    summary = {
+        "as_of_date": str(today_row["date"]),
+        "today_share_pct": today_val,
+        "average_share_pct": avg,
+        "diff_pp": diff_pp,
+        "diff_pct_vs_avg": diff_pct,
+        "points_count": int(len(df_plot)),
     }
 
-    with open(out_path, "w") as f:
-        json.dump(payload, f, indent=2)
+    with open(OUTPUT_SUMMARY, "w") as f:
+        json.dump(summary, f, indent=2)
 
-# after you finish df_pretty:
-write_latest_json(df_pretty, "latest.json")
+    return summary
 
-import plotly.express as px
 
-def write_plotly_html(df_pretty, out_html="plot.html"):
-    fig = px.line(
-        df_pretty,
-        x="date",
-        y="Binance Market Share",
-        title="Binance Market Share of Total Crypto Market Cap",
-    )
-    fig.update_yaxes(ticksuffix="%")
-    fig.update_layout(hovermode="x unified")
-    fig.write_html(out_html, include_plotlyjs="cdn")
 # =========================
-# Plot + annotate
+# 6) Plot
 # =========================
-def plot_chart(df: pd.DataFrame, days_to_plot: int = DAYS_TO_PLOT, out_png: str = OUTPUT_PNG) -> None:
-    df_plot = df.copy()
-    df_plot["dt"] = pd.to_datetime(df_plot[COL_DATE])
+def plot_chart(df_raw: pd.DataFrame, days_to_plot: int = DAYS_TO_PLOT) -> dict:
+    df = df_raw.copy()
+    df = df.dropna(subset=["binance_market_share_pct"]).sort_values("date").reset_index(drop=True)
 
-    if days_to_plot is not None and days_to_plot > 0 and len(df_plot) > days_to_plot:
-        df_plot = df_plot.iloc[-days_to_plot:].copy()
+    if days_to_plot and len(df) > days_to_plot:
+        df_plot = df.tail(days_to_plot).copy()
+    else:
+        df_plot = df.copy()
 
-    avg = df_plot[COL_SHARE].mean()
-    today_val = df_plot[COL_SHARE].iloc[-1]
-
-    # Difference in percentage points and relative to average
+    avg = float(df_plot["binance_market_share_pct"].mean())
+    today_val = float(df_plot.iloc[-1]["binance_market_share_pct"])
     diff_pp = today_val - avg
-    rel = (diff_pp / avg) * 100.0 if avg != 0 else float("nan")
+    diff_pct = (diff_pp / avg) * 100.0 if avg != 0 else 0.0
 
     plt.figure(figsize=(12, 6))
-    plt.plot(df_plot["dt"], df_plot[COL_SHARE], label="Daily %")
+    plt.plot(df_plot["date"], df_plot["binance_market_share_pct"], label="Daily %")
+    # average line must be red
     plt.axhline(avg, linestyle="--", linewidth=2, color="red", label=f"Average ({avg:.2f}%)")
 
     plt.title("Binance Market Share of Total Crypto Market Cap")
@@ -196,49 +242,58 @@ def plot_chart(df: pd.DataFrame, days_to_plot: int = DAYS_TO_PLOT, out_png: str 
     plt.xlabel("Date")
     plt.grid(True)
 
-    # Legend top-left; then put annotation just BELOW it (so they don't overlap)
+    # Put legend in upper left, then put annotation BELOW it (no overlap)
     plt.legend(loc="upper left")
 
-    sign = "+" if diff_pp >= 0 else "-"
-    text = f"Today vs Avg: {sign}{abs(diff_pp):.2f}pp ({sign}{abs(rel):.1f}%)"
+    annotation = f"Today vs Avg: {diff_pp:+.2f}pp ({diff_pct:+.1f}%)"
+    # y=0.86 keeps it below legend area in most cases; tweak if you change legend location
     plt.gca().text(
-        0.015, 0.88, text, transform=plt.gca().transAxes,
-        va="top", ha="left",
-        bbox=dict(boxstyle="round,pad=0.3", alpha=0.15)
+        0.02,
+        0.86,
+        annotation,
+        transform=plt.gca().transAxes,
+        fontsize=11,
+        bbox=dict(boxstyle="round,pad=0.3", alpha=0.2),
     )
 
     plt.tight_layout()
-    plt.savefig(out_png, dpi=150)
+    plt.savefig(OUTPUT_CHART, dpi=160)
     plt.close()
 
-    print(f"✅ Wrote chart: {out_png}")
-    print(text)
+    return {
+        "avg": avg,
+        "today": today_val,
+        "diff_pp": diff_pp,
+        "diff_pct": diff_pct,
+        "last_date": str(df_plot.iloc[-1]["date"]),
+        "rows_plotted": int(len(df_plot)),
+    }
 
 
-def format_for_humans(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Optional: store values in BILLIONS for readability.
-    Keeps % as percent (not fraction).
-    """
-    out = df.copy()
-    out[COL_TOTAL] = (out[COL_TOTAL] / 1e9).round(2)
-    out[COL_BINANCE] = (out[COL_BINANCE] / 1e9).round(2)
-    out[COL_SHARE] = out[COL_SHARE].round(3)
-    return out
-
-
+# =========================
+# MAIN
+# =========================
 def main():
-    df = load_historical(HISTORICAL_CSV)
-    df = upsert_today(df)
+    print("Loading historical...")
+    df_hist = load_historical(HISTORICAL_CSV)
 
-    # Save “human-friendly” CSV in billions (recommended)
-    df_out = format_for_humans(df)
-    df_out.to_csv(OUTPUT_CSV, index=False)
-    print(f"✅ Wrote CSV: {OUTPUT_CSV}")
+    df_updated = upsert_today(df_hist)
 
-    plot_chart(df, DAYS_TO_PLOT, OUTPUT_PNG)
-    
-write_plotly_html(df_pretty, "plot.html")
+    # save raw updated series (good for chart + github pages)
+    df_updated.to_csv(OUTPUT_RAW_CSV, index=False)
+
+    # pretty output for humans
+    df_pretty = make_pretty(df_updated)
+    df_pretty.to_csv(OUTPUT_PRETTY_CSV, index=False)
+
+    # plot + summary
+    plot_stats = plot_chart(df_updated, DAYS_TO_PLOT)
+    summary = write_summary(df_updated.tail(DAYS_TO_PLOT) if DAYS_TO_PLOT else df_updated)
+
+    print("✅ Wrote:", OUTPUT_RAW_CSV, OUTPUT_PRETTY_CSV, OUTPUT_CHART, OUTPUT_SUMMARY)
+    print("Plot stats:", plot_stats)
+    print("Summary:", summary)
+
 
 if __name__ == "__main__":
     main()

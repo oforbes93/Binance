@@ -130,7 +130,46 @@ def upsert_today(df_hist: pd.DataFrame) -> pd.DataFrame:
     print("✅ Added today's row")
     return df_updated
 
+import json
+from datetime import datetime
 
+def write_latest_json(df_pretty, out_path="latest.json"):
+    # expects columns: date, Binance Market Share (or adjust below)
+    last = df_pretty.dropna().iloc[-1]
+    avg = df_pretty["Binance Market Share"].mean()
+
+    today_val = float(last["Binance Market Share"])
+    avg_val = float(avg)
+    pp = today_val - avg_val
+    rel = (pp / avg_val) * 100 if avg_val else None
+
+    payload = {
+        "date": str(last["date"]),
+        "today_pct": round(today_val, 3),
+        "avg_pct": round(avg_val, 3),
+        "pp_vs_avg": round(pp, 3),
+        "pct_vs_avg": round(rel, 2) if rel is not None else None,
+        "updated_utc": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC"),
+    }
+
+    with open(out_path, "w") as f:
+        json.dump(payload, f, indent=2)
+
+# after you finish df_pretty:
+write_latest_json(df_pretty, "latest.json")
+
+import plotly.express as px
+
+def write_plotly_html(df_pretty, out_html="plot.html"):
+    fig = px.line(
+        df_pretty,
+        x="date",
+        y="Binance Market Share",
+        title="Binance Market Share of Total Crypto Market Cap",
+    )
+    fig.update_yaxes(ticksuffix="%")
+    fig.update_layout(hovermode="x unified")
+    fig.write_html(out_html, include_plotlyjs="cdn")
 # =========================
 # Plot + annotate
 # =========================
@@ -198,7 +237,8 @@ def main():
     print(f"✅ Wrote CSV: {OUTPUT_CSV}")
 
     plot_chart(df, DAYS_TO_PLOT, OUTPUT_PNG)
-
+    
+write_plotly_html(df_pretty, "plot.html")
 
 if __name__ == "__main__":
     main()

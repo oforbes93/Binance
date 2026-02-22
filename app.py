@@ -43,14 +43,18 @@ def get_defillama_data():
     data = json.loads(script_tag.string)
     page_props = data.get("props", {}).get("pageProps", {})
     
-    # Extract Assets
+    # 1. Assets
     chains = page_props.get("currentTvlByChain", {})
     total_assets = float(sum(chains.values()))
     
-    # Extract Net Flow (Latest point in historical flow data)
-    # totalNetFlows is a list of [timestamp, usd_value]
+    # 2. Net Flow Fallback Logic
+    # Try historical data first
     flow_history = page_props.get("totalNetFlows", [])
-    latest_net_flow = float(flow_history[-1][1]) if flow_history else 0.0
+    if flow_history:
+        latest_net_flow = float(flow_history[-1][1])
+    else:
+        # FALLBACK: Pull the static "24h Inflow" from the summary if history is blank
+        latest_net_flow = float(page_props.get("inflow24h", 0.0))
     
     return total_assets, latest_net_flow
 

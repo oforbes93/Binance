@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>Binance Market Share</title>
+  <title>Binance Market Intelligence</title>
   <style>
     body {
       font-family: Arial, sans-serif;
@@ -10,23 +10,18 @@
       background: #ffffff;
       color: #111;
     }
-
-    h1 {
-      margin-bottom: 10px;
-    }
-
-    .chart {
-      margin-top: 20px;
+    h1, h2 { margin-bottom: 10px; }
+    .chart-container {
+      margin-top: 30px;
       max-width: 900px;
     }
-
     .chart img {
       width: 100%;
       height: auto;
       border: 1px solid #ddd;
       border-radius: 6px;
+      margin-bottom: 20px;
     }
-
     .description {
       max-width: 900px;
       margin-top: 25px;
@@ -34,36 +29,39 @@
       color: #444;
       font-size: 14px;
     }
+    .flow-positive { color: green; font-weight: bold; }
+    .flow-negative { color: red; font-weight: bold; }
   </style>
 </head>
-
 <body>
 
-  <h1>Binance Market Share of Total Crypto Market Cap</h1>
+  <h1>Binance Exchange Analysis</h1>
 
-  <div class="chart">
-    <img src="chart.png" alt="Binance Market Share Chart">
+  <div class="chart-container">
+    <h2>1. Market Share of Total Crypto Cap</h2>
+    <div class="chart">
+      <img src="chart.png" alt="Binance Market Share Chart">
+    </div>
+
+    <h2>2. Exchange Net Flows (24h)</h2>
+    <div class="chart">
+      <img src="net_flow_chart.png" alt="Binance Net Flow Chart">
+    </div>
   </div>
 
   <div class="description">
     <p>
-      This chart shows Binance’s share of the total cryptocurrency market
-      capitalisation over time.
+      <strong>Market Share:</strong> Calculated as Binance total assets divided by total crypto market capitalisation.
     </p>
-
     <p>
-      Binance asset data is sourced from DefiLlama’s centralised exchange
-      transparency dashboards, while total crypto market capitalisation is
-      sourced from TradingView’s CRYPTOCAP:TOTAL series. The series is updated
-      daily via GitHub Actions.
+      <strong>Net Flow:</strong> Represents the net USD value of assets entering or leaving the exchange over a 24-hour period. 
+      <span class="flow-positive">Green bars</span> indicate net deposits (inflows), while 
+      <span class="flow-negative">red bars</span> indicate net withdrawals (outflows).
     </p>
-
     <p>
-      The metric is calculated as Binance total assets divided by total crypto
-      market capitalisation, expressed as a percentage.
+      <em>Data sources: DefiLlama (Assets/Flows) and CoinGecko (Global Market Cap). Updated daily.</em>
     </p>
   </div>
 
 </body>
 </html>
-

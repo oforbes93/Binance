@@ -24,43 +24,46 @@ def _today_utc_date():
     return datetime.now(timezone.utc).date()
 
 def _standardize_columns(df: pd.DataFrame) -> pd.DataFrame:
-    # Ensure all required columns exist, including the new net_flow_usd
-    required = ["date", "total_mcap_usd", "binance_assets_usd", "binance_market_share_pct", "binance_net_flow_usd"]
-    for col in required:
-        if col not in df.columns:
-            df[col] = 0.0
+    # Ensure the new net flow column exists
+    if "binance_net_flow_usd" not in df.columns:
+        df["binance_net_flow_usd"] = 0.0
+    
+    # Existing normalization logic
+    mapping = {
+        "Total MCAP": "total_mcap_usd",
+        "Binance Assets": "binance_assets_usd",
+        "Binance Market Share": "binance_market_share_pct"
+    }
+    df = df.rename(columns=mapping)
     df["date"] = pd.to_datetime(df["date"]).dt.date
     return df.sort_values("date").reset_index(drop=True)
 
 def get_defillama_data():
+    """Fetches both Total Assets and 24h Net Flow from DeFiLlama."""
     url = "https://defillama.com/cex/binance-cex"
     scraper = cloudscraper.create_scraper(browser={"browser": "chrome", "platform": "darwin", "mobile": False})
     r = scraper.get(url, timeout=30, headers={"User-Agent": USER_AGENT})
     r.raise_for_status()
-    
+
     soup = BeautifulSoup(r.text, "html.parser")
     script_tag = soup.find("script", id="__NEXT_DATA__")
     data = json.loads(script_tag.string)
     page_props = data.get("props", {}).get("pageProps", {})
-    
-    # 1. Assets
+
+    # 1. Total Assets
     chains = page_props.get("currentTvlByChain", {})
     total_assets = float(sum(chains.values()))
+
+    # 2. 24h Net Flow (The value from the table in your screenshot)
+    # We pull 'inflow24h' which is the stable summary figure
+    net_flow = float(page_props.get("inflow24h", 0.0))
     
-    # 2. Net Flow Fallback Logic
-    # Try historical data first
-    flow_history = page_props.get("totalNetFlows", [])
-    if flow_history:
-        latest_net_flow = float(flow_history[-1][1])
-    else:
-        # FALLBACK: Pull the static "24h Inflow" from the summary if history is blank
-        latest_net_flow = float(page_props.get("inflow24h", 0.0))
-    
-    return total_assets, latest_net_flow
+    return total_assets, net_flow
 
 def get_total_crypto_mcap_today() -> float:
     url = "https://api.coingecko.com/api/v3/global"
     r = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=20)
+    r.raise_for_status()
     return float(r.json()["data"]["total_market_cap"]["usd"])
 
 def main():
@@ -74,42 +77,56 @@ def main():
     today = _today_utc_date()
 
     if today in df["date"].values:
-        print("✅ Today already present.")
+        print("✅ Today's data already recorded.")
     else:
+        print("🚀 Fetching latest data from DeFiLlama and CoinGecko...")
         assets, net_flow = get_defillama_data()
         mcap = get_total_crypto_mcap_today()
         share = (assets / mcap) * 100.0
         
         new_row = pd.DataFrame({
-            "date": [today], "total_mcap_usd": [mcap], 
-            "binance_assets_usd": [assets], "binance_market_share_pct": [share],
+            "date": [today], 
+            "total_mcap_usd": [mcap], 
+            "binance_assets_usd": [assets], 
+            "binance_market_share_pct": [share],
             "binance_net_flow_usd": [net_flow]
         })
         df = pd.concat([df, new_row], ignore_index=True)
+        df.to_csv(HISTORICAL_CSV, index=False)
+        print(f"✅ Added: Assets=${assets/1e9:.2f}B, Net Flow=${net_flow/1e6:.2f}M")
 
-    # Save Data
+    # Save outputs
     df.to_csv(OUTPUT_RAW_CSV, index=False)
 
-    # Plot 1: Market Share
-    plt.figure(figsize=(10, 5))
-    plt.plot(df["date"], df["binance_market_share_pct"], color="blue", label="Market Share %")
-    plt.title("Binance Market Share")
+    # --- CHART 1: Market Share ---
+    plt.figure(figsize=(12, 6))
+    plt.plot(df["date"], df["binance_market_share_pct"], label="Market Share %", linewidth=2)
+    plt.title("Binance Market Share of Total Crypto Market Cap", fontsize=14)
+    plt.ylabel("% Share")
     plt.grid(True, alpha=0.3)
-    plt.savefig(CHART_SHARE)
+    plt.tight_layout()
+    plt.savefig(CHART_SHARE, dpi=160)
     plt.close()
 
-    # Plot 2: Net Flows (Bar Chart)
-    plt.figure(figsize=(10, 5))
-    colors = ['green' if x >= 0 else 'red' for x in df["binance_net_flow_usd"]]
-    plt.bar(df["date"], df["binance_net_flow_usd"] / 1e6, color=colors)
-    plt.axhline(0, color='black', linewidth=0.8)
-    plt.title("Binance 24h Net Flows (Millions USD)")
-    plt.ylabel("USD (Millions)")
-    plt.grid(True, alpha=0.2)
-    plt.savefig(CHART_FLOW)
+    # --- CHART 2: Net Flows (Bar Chart) ---
+    plt.figure(figsize=(12, 6))
+    # Filter only days where we have net flow data (non-zero or recent)
+    df_flow = df[df["binance_net_flow_usd"] != 0].copy()
+    if not df_flow.empty:
+        colors = ['#26a69a' if x >= 0 else '#ef5350' for x in df_flow["binance_net_flow_usd"]]
+        plt.bar(df_flow["date"], df_flow["binance_net_flow_usd"] / 1e6, color=colors, alpha=0.8)
+        plt.axhline(0, color='black', linewidth=0.8)
+        plt.title("Binance Daily Net Flows (USD Millions)", fontsize=14)
+        plt.ylabel("USD (Millions)")
+        plt.grid(axis='y', linestyle='--', alpha=0.5)
+    else:
+        plt.text(0.5, 0.5, "Waiting for more data points...", ha='center')
+        
+    plt.tight_layout()
+    plt.savefig(CHART_FLOW, dpi=160)
     plt.close()
 
-    print("✅ Successfully updated charts and data.")
+    print("✅ All charts updated successfully.")
 
 if __name__ == "__main__":
     main()

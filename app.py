@@ -11,7 +11,7 @@ from bs4 import BeautifulSoup
 # =========================
 # CONFIG
 # =========================
-MS_CSV = "binance_market_share_history.csv"   # Your legit market share data
+MS_CSV = "binance_market_share_history.csv"   # Your verified market share data
 NF_CSV = "binance_net_flows.csv"              # Your new net flow data
 CHART_SHARE = "chart.png"
 CHART_FLOW = "net_flow_chart.png"
@@ -61,7 +61,7 @@ def main():
     df_plot = df.tail(DAYS_TO_PLOT).copy()
 
     # ==========================================
-    # RESTORED CHART 1: Market Share with Average
+    # CHART 1: Market Share with Average (FIXED)
     # ==========================================
     avg = float(df_plot["binance_market_share_pct"].mean())
     today_val = float(df_plot.iloc[-1]["binance_market_share_pct"])
@@ -69,20 +69,21 @@ def main():
     diff_pct = (diff_pp / avg) * 100.0 if avg != 0 else 0.0
 
     plt.figure(figsize=(12, 6))
+    
+    # Plot the daily line FIRST
     plt.plot(df_plot["date"], df_plot["binance_market_share_pct"], label="Daily %", color="tab:blue")
     
-    # Restored Red Dashed Trendline
-    plt.axhline(avg, linestyle="--", linewidth=2, color="red", label=f"Average ({avg:.2f}%)")
+    # RESTORED: Horizontal red dashed line for average
+    plt.axhline(y=avg, color='red', linestyle='--', linewidth=2, label=f"Average ({avg:.2f}%)")
 
     plt.title("Binance Market Share of Total Crypto Market Cap")
     plt.ylabel("% Share")
-    plt.xlabel("Date")
     plt.grid(True, alpha=0.3)
     
-    # Restored Legend in Upper Left
-    plt.legend(loc="upper left")
+    # FIXED: Re-enabling the legend for both lines
+    plt.legend(loc="upper left", frameon=True)
 
-    # Restored Text Annotation below legend
+    # RESTORED: Text Annotation box clearly inside axes
     annotation = f"Today vs Avg: {diff_pp:+.2f}pp ({diff_pct:+.1f}%)"
     plt.gca().text(0.02, 0.86, annotation, transform=plt.gca().transAxes, 
                    fontsize=11, bbox=dict(boxstyle="round,pad=0.3", alpha=0.2))
@@ -95,13 +96,13 @@ def main():
     # CHART 2: Net Flows (Bar Chart)
     # ==========================================
     plt.figure(figsize=(12, 6))
-    df_flow_recent = df.tail(30).copy() # Showing last 30 days
+    df_flow_recent = df.tail(30).copy()
     colors = ['#26a69a' if x >= 0 else '#ef5350' for x in df_flow_recent["binance_net_flow_usd"]]
     
     plt.bar(df_flow_recent["date"], df_flow_recent["binance_net_flow_usd"] / 1e6, color=colors)
     plt.axhline(0, color='black', linewidth=0.8)
     
-    # Custom Flow Legend
+    # Legend for Net Flow chart
     plt.legend(handles=[mpatches.Patch(color='#26a69a', label='Net Inflow'), 
                         mpatches.Patch(color='#ef5350', label='Net Outflow')], loc="upper left")
 
@@ -112,7 +113,7 @@ def main():
     plt.savefig(CHART_FLOW, dpi=160)
     plt.close()
 
-    print("✅ All original features restored and net flow chart added.")
+    print("✅ Original Market Share chart restored with average line and legend.")
 
 if __name__ == "__main__":
     main()

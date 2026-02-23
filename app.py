@@ -127,6 +127,9 @@ def main():
     plt.close()
 
     print("✅ All charts updated successfully.")
-
+    
+if "binance_net_flow_usd" not in df.columns:
+    df["binance_net_flow_usd"] = 0.0
+    
 if __name__ == "__main__":
     main()

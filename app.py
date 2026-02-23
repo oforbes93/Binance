@@ -10,33 +10,18 @@ from bs4 import BeautifulSoup
 # =========================
 # CONFIG
 # =========================
-HISTORICAL_CSV = "binance_market_share_history.csv"
+MS_CSV = "binance_market_share_history.csv"   # Primary Market Share file
+NF_CSV = "binance_net_flows.csv"              # New Net Flow file
 OUTPUT_RAW_CSV = "binance_market_share_history_raw.csv"
 OUTPUT_PRETTY_CSV = "binance_market_share_history_pretty.csv"
 CHART_SHARE = "chart.png"
 CHART_FLOW = "net_flow_chart.png"
-OUTPUT_SUMMARY = "summary.json"
 
 DAYS_TO_PLOT = 365
 USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36"
 
 def _today_utc_date():
     return datetime.now(timezone.utc).date()
-
-def _standardize_columns(df: pd.DataFrame) -> pd.DataFrame:
-    # Ensure the new net flow column exists
-    if "binance_net_flow_usd" not in df.columns:
-        df["binance_net_flow_usd"] = 0.0
-    
-    # Existing normalization logic
-    mapping = {
-        "Total MCAP": "total_mcap_usd",
-        "Binance Assets": "binance_assets_usd",
-        "Binance Market Share": "binance_market_share_pct"
-    }
-    df = df.rename(columns=mapping)
-    df["date"] = pd.to_datetime(df["date"]).dt.date
-    return df.sort_values("date").reset_index(drop=True)
 
 def get_defillama_data():
     """Fetches both Total Assets and 24h Net Flow from DeFiLlama."""
@@ -50,12 +35,8 @@ def get_defillama_data():
     data = json.loads(script_tag.string)
     page_props = data.get("props", {}).get("pageProps", {})
 
-    # 1. Total Assets
     chains = page_props.get("currentTvlByChain", {})
     total_assets = float(sum(chains.values()))
-
-    # 2. 24h Net Flow (The value from the table in your screenshot)
-    # We pull 'inflow24h' which is the stable summary figure
     net_flow = float(page_props.get("inflow24h", 0.0))
     
     return total_assets, net_flow
@@ -67,40 +48,51 @@ def get_total_crypto_mcap_today() -> float:
     return float(r.json()["data"]["total_market_cap"]["usd"])
 
 def main():
-    print("Loading historical...")
+    print("Loading data sources...")
+    # Load Primary Market Share
     try:
-        df = pd.read_csv(HISTORICAL_CSV)
+        df_ms = pd.read_csv(MS_CSV)
+        df_ms['date'] = pd.to_datetime(df_ms['date']).dt.date
     except FileNotFoundError:
-        df = pd.DataFrame(columns=["date", "total_mcap_usd", "binance_assets_usd", "binance_market_share_pct", "binance_net_flow_usd"])
-    
-    df = _standardize_columns(df)
+        df_ms = pd.DataFrame(columns=["date", "total_mcap_usd", "binance_assets_usd", "binance_market_share_pct"])
+
+    # Load Net Flows
+    try:
+        df_nf = pd.read_csv(NF_CSV)
+        df_nf['date'] = pd.to_datetime(df_nf['date']).dt.date
+    except FileNotFoundError:
+        df_nf = pd.DataFrame(columns=["date", "binance_net_flow_usd"])
+
     today = _today_utc_date()
 
-    if today in df["date"].values:
-        print("✅ Today's data already recorded.")
-    else:
-        print("🚀 Fetching latest data from DeFiLlama and CoinGecko...")
-        assets, net_flow = get_defillama_data()
+    # 1. Update Market Share File if needed
+    if today not in df_ms["date"].values:
+        print("🚀 Fetching today's Market Share data...")
+        assets, net_flow_val = get_defillama_data()
         mcap = get_total_crypto_mcap_today()
         share = (assets / mcap) * 100.0
         
-        new_row = pd.DataFrame({
+        new_ms_row = pd.DataFrame({
             "date": [today], 
             "total_mcap_usd": [mcap], 
             "binance_assets_usd": [assets], 
-            "binance_market_share_pct": [share],
-            "binance_net_flow_usd": [net_flow]
+            "binance_market_share_pct": [share]
         })
-        df = pd.concat([df, new_row], ignore_index=True)
-        df.to_csv(HISTORICAL_CSV, index=False)
-        print(f"✅ Added: Assets=${assets/1e9:.2f}B, Net Flow=${net_flow/1e6:.2f}M")
+        df_ms = pd.concat([df_ms, new_ms_row], ignore_index=True)
+        df_ms.to_csv(MS_CSV, index=False)
+        
+        # 2. Update Net Flow File separately
+        new_nf_row = pd.DataFrame({"date": [today], "binance_net_flow_usd": [net_flow_val]})
+        df_nf = pd.concat([df_nf, new_nf_row], ignore_index=True)
+        df_nf.to_csv(NF_CSV, index=False)
+        print(f"✅ Data updated for {today}")
 
-    # Save outputs
-    df.to_csv(OUTPUT_RAW_CSV, index=False)
+    # 3. Merge data in-memory for plotting
+    df_combined = pd.merge(df_ms, df_nf, on="date", how="left").fillna(0)
 
     # --- CHART 1: Market Share ---
     plt.figure(figsize=(12, 6))
-    plt.plot(df["date"], df["binance_market_share_pct"], label="Market Share %", linewidth=2)
+    plt.plot(df_combined["date"], df_combined["binance_market_share_pct"], color="blue", linewidth=2)
     plt.title("Binance Market Share of Total Crypto Market Cap", fontsize=14)
     plt.ylabel("% Share")
     plt.grid(True, alpha=0.3)
@@ -110,23 +102,21 @@ def main():
 
     # --- CHART 2: Net Flows (Bar Chart) ---
     plt.figure(figsize=(12, 6))
-    # Filter only days where we have net flow data (non-zero or recent)
-    df_flow = df[df["binance_net_flow_usd"] != 0].copy()
-    if not df_flow.empty:
-        colors = ['#26a69a' if x >= 0 else '#ef5350' for x in df_flow["binance_net_flow_usd"]]
-        plt.bar(df_flow["date"], df_flow["binance_net_flow_usd"] / 1e6, color=colors, alpha=0.8)
-        plt.axhline(0, color='black', linewidth=0.8)
-        plt.title("Binance Daily Net Flows (USD Millions)", fontsize=14)
-        plt.ylabel("USD (Millions)")
-        plt.grid(axis='y', linestyle='--', alpha=0.5)
-    else:
-        plt.text(0.5, 0.5, "Waiting for more data points...", ha='center')
-        
+    # Only plot non-zero flows or the last 14 days to ensure the chart renders
+    df_flow_plot = df_combined.tail(14).copy()
+    
+    colors = ['#26a69a' if x >= 0 else '#ef5350' for x in df_flow_plot["binance_net_flow_usd"]]
+    plt.bar(df_flow_plot["date"], df_flow_plot["binance_net_flow_usd"] / 1e6, color=colors, alpha=0.8)
+    plt.axhline(0, color='black', linewidth=0.8)
+    plt.title("Binance Daily Net Flows (USD Millions)", fontsize=14)
+    plt.ylabel("USD (Millions)")
+    plt.grid(axis='y', linestyle='--', alpha=0.5)
+    
     plt.tight_layout()
     plt.savefig(CHART_FLOW, dpi=160)
     plt.close()
 
-    print("✅ All charts updated successfully.")
+    print("✅ All charts updated successfully using separate CSV sources.")
 
 if __name__ == "__main__":
     main()

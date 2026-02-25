@@ -143,25 +143,16 @@ def get_total_crypto_mcap_today() -> float:
 def upsert_today(df_hist: pd.DataFrame) -> pd.DataFrame:
     today = _today_utc_date()
 
+    # If today exists, we don't fetch from API (saves credits/limits)
+    # but we still return the dataframe so the chart can be redrawn below.
     if today in df_hist["date"].values:
-        print("✅ Today already present — no update needed.")
+        print("✅ Data for today already exists in CSV.")
         return df_hist
 
-    print("🚀 Fetching today's Binance assets (DeFiLlama) + total mcap (CoinGecko)...")
-    binance_assets = get_binance_assets_today_defillama()
-    time.sleep(0.5)
-    total_mcap = get_total_crypto_mcap_today()
-
-    share_pct = (binance_assets / total_mcap) * 100.0
-
-    new_row = pd.DataFrame(
-        {
-            "date": [today],
-            "total_mcap_usd": [total_mcap],
-            "binance_assets_usd": [binance_assets],
-            "binance_market_share_pct": [share_pct],
-        }
-    )
+    print("🚀 Fetching fresh data...")
+    # ... (Keep your existing fetching logic here)
+    # ...
+    return df_updated
 
     df_updated = pd.concat([df_hist, new_row], ignore_index=True)
     df_updated = df_updated.sort_values("date").reset_index(drop=True)
@@ -277,22 +268,22 @@ def main():
     print("Loading historical...")
     df_hist = load_historical(HISTORICAL_CSV)
 
+    # 1. Update data (only fetches if date is missing)
     df_updated = upsert_today(df_hist)
 
-    # save raw updated series (good for chart + github pages)
+    # 2. ALWAYS save and ALWAYS plot
+    # This ensures that even if data didn't change, the chart.png 
+    # timestamp updates, which helps GitHub Pages realize there is a change.
     df_updated.to_csv(OUTPUT_RAW_CSV, index=False)
-
-    # pretty output for humans
+    
     df_pretty = make_pretty(df_updated)
     df_pretty.to_csv(OUTPUT_PRETTY_CSV, index=False)
 
-    # plot + summary
+    # This is the "Dynamic Average" - it calculates based on the df_updated length
     plot_stats = plot_chart(df_updated, DAYS_TO_PLOT)
-    summary = write_summary(df_updated.tail(DAYS_TO_PLOT) if DAYS_TO_PLOT else df_updated)
+    write_summary(df_updated.tail(DAYS_TO_PLOT) if DAYS_TO_PLOT else df_updated)
 
-    print("✅ Wrote:", OUTPUT_RAW_CSV, OUTPUT_PRETTY_CSV, OUTPUT_CHART, OUTPUT_SUMMARY)
-    print("Plot stats:", plot_stats)
-    print("Summary:", summary)
+    print(f"✅ Refresh Complete. Last Date: {df_updated.iloc[-1]['date']}")
 
 
 if __name__ == "__main__":

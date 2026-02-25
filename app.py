@@ -9,10 +9,10 @@ import cloudscraper
 from bs4 import BeautifulSoup
 
 # =========================
-# CONFIG (edit if needed)
+# CONFIG (Sync fixed)
 # =========================
-HISTORICAL_CSV = "binance_market_share_history.csv"   # your existing historicals file
-OUTPUT_RAW_CSV = "binance_market_share_history_raw.csv"
+HISTORICAL_CSV = "binance_market_share_history.csv"
+OUTPUT_RAW_CSV = "binance_market_share_history.csv"
 OUTPUT_PRETTY_CSV = "binance_market_share_history_pretty.csv"
 OUTPUT_CHART = "chart.png"
 OUTPUT_SUMMARY = "summary.json"
@@ -279,7 +279,7 @@ def main():
 
     df_updated = upsert_today(df_hist)
 
-    # save raw updated series (good for chart + github pages)
+    # save raw updated series
     df_updated.to_csv(OUTPUT_RAW_CSV, index=False)
 
     # pretty output for humans
@@ -294,6 +294,9 @@ def main():
     print("Plot stats:", plot_stats)
     print("Summary:", summary)
 
+
+if __name__ == "__main__":
+    main()
 
 if __name__ == "__main__":
     main()

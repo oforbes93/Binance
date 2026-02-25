@@ -33,6 +33,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add chart.png binance_market_share_history.csv
-          git diff --cached --quiet || git commit -m "Daily update"
-          git push
+          # Adding everything to ensure CSV, JSON, and PNG are all captured
+          git add .
+          # Commits only if changes exist, then pushes
+          git diff --cached --quiet || (git commit -m "Daily update $(date -u +'%Y-%m-%d')" && git push)

@@ -42,7 +42,7 @@
   <h1>Binance Market Share of Total Crypto Market Cap</h1>
 
   <div class="chart">
-    <img src="chart.png" alt="Binance Market Share Chart">
+    <img id="daily-chart" src="chart.png" alt="Binance Market Share Chart">
   </div>
 
   <div class="description">
@@ -63,6 +63,15 @@
       market capitalisation, expressed as a percentage.
     </p>
   </div>
+
+  <script>
+    // This adds a unique timestamp to the image URL (e.g., chart.png?v=1708892...)
+    // This tricks the browser into thinking it's a new file every time.
+    const chartImg = document.getElementById('daily-chart');
+    if (chartImg) {
+      chartImg.src = "chart.png?t=" + new Date().getTime();
+    }
+  </script>
 
 </body>
 </html>

@@ -1,10 +1,14 @@
+import os
 import json
 import time
-import os
 from datetime import datetime, timezone
 
-import pandas as pd
+# 1. FORCE HEADLESS MODE (Must be before pyplot import)
+import matplotlib
+matplotlib.use('Agg') 
 import matplotlib.pyplot as plt
+
+import pandas as pd
 import requests
 import cloudscraper
 from bs4 import BeautifulSoup
@@ -19,7 +23,7 @@ OUTPUT_CHART = "chart.png"
 OUTPUT_SUMMARY = "summary.json"
 
 DAYS_TO_PLOT = 365
-USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36"
+USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
 # =========================
 # Helpers
@@ -28,7 +32,7 @@ def _today_utc_date():
     return datetime.now(timezone.utc).date()
 
 def _standardize_columns(df: pd.DataFrame) -> pd.DataFrame:
-    # Normalize column names to lowercase for checking
+    """Ensure column names match the expected raw schema."""
     df.columns = [c.strip() for c in df.columns]
     
     mapping = {
@@ -48,7 +52,7 @@ def _standardize_columns(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 # =========================
-# 1) Fetching Logic
+# API Fetchers
 # =========================
 def get_binance_assets_today_defillama() -> float:
     url = "https://defillama.com/cex/binance-cex"
@@ -78,19 +82,20 @@ def get_total_crypto_mcap_today() -> float:
             r = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=20)
             r.raise_for_status()
             return float(r.json()["data"]["total_market_cap"]["usd"])
-        except Exception:
-            time.sleep(2)
-    raise RuntimeError("CoinGecko API failed after retries.")
+        except Exception as e:
+            print(f"CoinGecko retry... {e}")
+            time.sleep(5)
+    raise RuntimeError("CoinGecko API failed after 3 retries.")
 
 # =========================
-# 2) Data Processing
+# Core Logic
 # =========================
 def upsert_today(df_hist: pd.DataFrame) -> pd.DataFrame:
     today = _today_utc_date()
     
-    # Check if we already have today's data to avoid redundant API calls
+    # If today already exists, we skip the API calls but return the DF
     if today in df_hist["date"].values:
-        print(f"✅ Data for {today} already exists. Skipping fetch.")
+        print(f"✅ Data for {today} already exists. Proceeding to refresh chart/files.")
         return df_hist
 
     print(f"🚀 Fetching fresh data for {today}...")
@@ -107,71 +112,96 @@ def upsert_today(df_hist: pd.DataFrame) -> pd.DataFrame:
         }])
 
         df_updated = pd.concat([df_hist, new_row], ignore_index=True)
-        return df_updated.sort_values("date").drop_duplicates(subset=['date'], keep='last').reset_index(drop=True)
+        # Ensure date is date object, drop duplicates, and sort
+        df_updated["date"] = pd.to_datetime(df_updated["date"]).dt.date
+        df_updated = df_updated.drop_duplicates(subset=['date'], keep='last').sort_values("date")
+        return df_updated.reset_index(drop=True)
     except Exception as e:
-        print(f"❌ Failed to update data: {e}")
+        print(f"❌ Failed to fetch new data: {e}")
         return df_hist
 
-def make_pretty(df_raw: pd.DataFrame) -> pd.DataFrame:
-    df = df_raw.copy()
-    df["Total MCAP (Bn)"] = (df["total_mcap_usd"] / 1e9).round(2)
-    df["Binance Assets (Bn)"] = (df["binance_assets_usd"] / 1e9).round(2)
-    df["Binance Market Share %"] = df["binance_market_share_pct"].round(3)
-    return df[["date", "Total MCAP (Bn)", "Binance Assets (Bn)", "Binance Market Share %"]]
+def plot_chart(df_raw: pd.DataFrame):
+    """Generates the PNG chart and handles cleanup for GitHub Actions."""
+    # Reset Matplotlib state
+    plt.clf()
+    plt.close('all')
 
-def plot_chart(df: pd.DataFrame):
+    df = df_raw.copy()
     df = df.dropna(subset=["binance_market_share_pct"]).tail(DAYS_TO_PLOT)
+    
+    if df.empty:
+        print("⚠️ No data available to plot.")
+        return
+
     avg = df["binance_market_share_pct"].mean()
+    latest_val = df["binance_market_share_pct"].iloc[-1]
+    diff = latest_val - avg
     
-    plt.figure(figsize=(12, 6))
-    plt.plot(df["date"], df["binance_market_share_pct"], label="Daily %", color='#007bff', linewidth=2)
-    plt.axhline(avg, linestyle="--", color="red", label=f"Avg ({avg:.2f}%)")
+    fig, ax = plt.subplots(figsize=(12, 6))
+    ax.plot(df["date"], df["binance_market_share_pct"], label="Daily %", color='#007bff', linewidth=2)
+    ax.axhline(avg, linestyle="--", color="red", label=f"Average ({avg:.2f}%)")
     
-    plt.title("Binance Market Share of Total Crypto Market Cap", fontsize=14)
-    plt.ylabel("% Share")
-    plt.grid(True, alpha=0.3)
-    plt.legend(loc="upper left")
-    
+    ax.set_title("Binance Market Share of Total Crypto Market Cap", fontsize=14, pad=15)
+    ax.set_ylabel("% Share")
+    ax.grid(True, alpha=0.3)
+    ax.legend(loc="upper left")
+
+    # Add text annotation
+    annotation = f"Latest: {latest_val:.2f}% (Avg: {avg:.2f}%)"
+    ax.text(0.02, 0.85, annotation, transform=ax.transAxes, fontsize=10, 
+            bbox=dict(boxstyle="round,pad=0.3", facecolor='white', alpha=0.5))
+
     plt.tight_layout()
+    
+    # Remove old file if exists to force a fresh write
+    if os.path.exists(OUTPUT_CHART):
+        os.remove(OUTPUT_CHART)
+        
     plt.savefig(OUTPUT_CHART, dpi=160)
-    plt.close()
+    plt.close(fig)
+    print("📈 Chart saved successfully.")
 
 # =========================
 # MAIN
 # =========================
 def main():
+    # 1. Load Data
     if not os.path.exists(HISTORICAL_CSV):
-        print(f"❌ Error: {HISTORICAL_CSV} not found in root directory.")
-        return
+        print(f"❌ Error: {HISTORICAL_CSV} not found. Creating empty template.")
+        df_hist = pd.DataFrame(columns=["date", "total_mcap_usd", "binance_assets_usd", "binance_market_share_pct"])
+    else:
+        df_hist = pd.read_csv(HISTORICAL_CSV)
+        df_hist = _standardize_columns(df_hist)
 
-    print("Loading historical data...")
-    df_hist = pd.read_csv(HISTORICAL_CSV)
-    df_hist = _standardize_columns(df_hist)
-
-    # 1. Update
+    # 2. Update Data
     df_updated = upsert_today(df_hist)
 
-    # 2. Save Raw (This is your database)
+    # 3. Save Files (Updating timestamps even if no new data)
     df_updated.to_csv(HISTORICAL_CSV, index=False)
     df_updated.to_csv(OUTPUT_RAW_CSV, index=False)
-
-    # 3. Save Pretty (For humans/GitHub preview)
-    df_pretty = make_pretty(df_updated)
-    df_pretty.to_csv(OUTPUT_PRETTY_CSV, index=False)
+    
+    # Create Pretty Version
+    df_pretty = df_updated.copy()
+    df_pretty["Total MCAP (Bn)"] = (df_pretty["total_mcap_usd"] / 1e9).round(2)
+    df_pretty["Binance Assets (Bn)"] = (df_pretty["binance_assets_usd"] / 1e9).round(2)
+    df_pretty["Market Share %"] = df_pretty["binance_market_share_pct"].round(3)
+    df_pretty[["date", "Total MCAP (Bn)", "Binance Assets (Bn)", "Market Share %"]].to_csv(OUTPUT_PRETTY_CSV, index=False)
 
     # 4. Save Summary JSON
     last_row = df_updated.iloc[-1]
     summary = {
+        "last_updated_utc": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
         "date": str(last_row["date"]),
         "share_pct": round(float(last_row["binance_market_share_pct"]), 3),
-        "avg_pct": round(float(df_updated.tail(DAYS_TO_PLOT)["binance_market_share_pct"].mean()), 3)
+        "avg_365d": round(float(df_updated.tail(365)["binance_market_share_pct"].mean()), 3)
     }
     with open(OUTPUT_SUMMARY, "w") as f:
         json.dump(summary, f, indent=2)
 
-    # 5. Plot
+    # 5. Generate Chart
     plot_chart(df_updated)
-    print(f"✅ Refresh Complete. Latest date: {df_updated.iloc[-1]['date']}")
+    
+    print(f"✅ Process finished. Last Date in Data: {df_updated.iloc[-1]['date']}")
 
 if __name__ == "__main__":
     main()
